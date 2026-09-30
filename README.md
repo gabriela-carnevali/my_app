@@ -6,9 +6,10 @@ Aplicativo cross-platform em JavaScript com Expo/React Native, API Node.js/Expre
 
 ```text
 backend/
-  sql/migrations/001_initial_schema.sql
+  sql/migrations/001_initial_schema.sql ... 004_route_stop_limit_27.sql
   src/
     config/database.js
+    config/routeLimits.js
     controllers/
     middlewares/auth.js
     repositories/
@@ -18,6 +19,7 @@ backend/
     server.js
 mobile/
   App.js
+  constants/routeLimits.js
   index.js
   context/AuthContext.js
   context/AppearanceContext.js
@@ -37,7 +39,7 @@ No backend, `app.js` configura o Express e monta as rotas; `server.js` inicia e 
 
 ## Backend
 
-Use Node.js 22.13 ou superior. Em um PostgreSQL com PostGIS, aplique em ordem `backend/sql/migrations/001_initial_schema.sql`, `002_driver_auth.sql` e `003_roles_and_route_day.sql`. A segunda e a terceira migrações atualizam instalações existentes. Na primeira execução, crie o `.env` somente se ele ainda não existir e preencha a conexão com o banco, o token Mapbox e um segredo JWT aleatório com pelo menos 32 bytes:
+Use Node.js 22.13 ou superior. Em um PostgreSQL com PostGIS, aplique em ordem as quatro migrações de `backend/sql/migrations`, de `001_initial_schema.sql` a `004_route_stop_limit_27.sql`. A quarta migração adiciona ao banco um bloqueio transacional para impedir que qualquer rota receba um 28º aluno. Na primeira execução, crie o `.env` somente se ele ainda não existir e preencha a conexão com o banco, o token Mapbox e um segredo JWT aleatório com pelo menos 32 bytes:
 
 ```powershell
 cd backend
@@ -93,6 +95,6 @@ Abra a pasta `mobile/android` no Android Studio e execute o app pelo IDE. També
 
 ## Otimização e segurança da parada
 
-Em `backend/src/services/routeOptimizer.js`, a garagem/posição da van e a escola são as pontas fixas. O limite é de 27 alunos por rota, e a primeira parada é a criança alcançável com a menor distância viária desde a van. A Matrix API recebe `approaches=curb` e é dividida em blocos que respeitam o limite de coordenadas do provedor. `routingService.js` também divide rotas longas em trechos de até 25 coordenadas, aplica a aproximação pela calçada em cada parada e junta a geometria e as métricas dos trechos.
+Em `backend/src/config/routeLimits.js`, o limite compartilhado pelo serviço, otimizador e repositório é de 27 alunos por percurso; o mobile mostra a capacidade e bloqueia inclusões acima desse limite. A migração 004 protege também gravações diretas e concorrentes no PostgreSQL. A garagem/posição usada no recálculo e a escola são as pontas fixas. A primeira parada é a criança alcançável com a menor distância viária desde a van. A Matrix API recebe `approaches=curb` e é dividida em blocos que respeitam o limite de coordenadas do provedor. `routingService.js` também divide rotas longas em trechos de até 25 coordenadas, aplica a aproximação pela calçada em cada parada e junta a geometria e as métricas dos trechos.
 
-O Mapbox Optimization v1 aceita até 12 coordenadas por chamada; ele é consultado como referência apenas em rotas com até 10 alunos. Até esse tamanho, o otimizador usa busca exata na matriz. De 11 a 27 alunos, ele usa inserção de paradas e busca local, mantendo a primeira criança fixa e reduzindo a distância total até a escola; essa busca é heurística e não garante o ótimo global. Se a primeira parada mais próxima não permitir uma sequência viável, a otimização retorna erro em vez de substituí-la por outra criança. Em ambos os casos, as estimativas dependem das rotas e distâncias retornadas pelo Mapbox, e a validação do lado da rua depende de coordenadas e do segmento orientado corretamente.
+O Mapbox Optimization v1 é consultado como referência somente em rotas com até 10 alunos, com `source=first`, `destination=last` e `approaches=curb`; uma falha nessa consulta opcional não impede a otimização baseada na matriz. Até 10 alunos, o otimizador usa busca exata na matriz. De 11 a 27, usa inserção de paradas e busca local, mantendo a primeira criança fixa e reduzindo a distância total até a escola; essa busca é heurística e não garante o ótimo global. Se a primeira parada mais próxima não permitir uma sequência viável, a otimização retorna erro em vez de substituí-la por outra criança. As estimativas dependem das rotas e distâncias retornadas pelo Mapbox, e a validação do lado da rua depende de coordenadas e do segmento orientado corretamente.

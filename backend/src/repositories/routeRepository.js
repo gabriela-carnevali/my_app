@@ -1,3 +1,5 @@
+import { LIMITE_DE_ALUNOS_POR_ROTA } from '../config/routeLimits.js';
+
 export function criarRepositorioDeRotas(bancoDeDados) {
   if (!bancoDeDados?.query) throw new TypeError('A PostgreSQL pool is required.');
 
@@ -33,7 +35,10 @@ export function criarRepositorioDeRotas(bancoDeDados) {
            v.consumo_medio_km_l AS "vehicleConsumptionKmPerLiter",
            jsonb_build_object(
              'type', 'van',
-             'coordinates', jsonb_build_array(ST_X(v.ponto_garagem), ST_Y(v.ponto_garagem))
+             'coordinates', jsonb_build_array(
+               ST_X(COALESCE(ST_StartPoint(r.geometria_rota), v.ponto_garagem)),
+               ST_Y(COALESCE(ST_StartPoint(r.geometria_rota), v.ponto_garagem))
+             )
            ) AS origin,
            jsonb_build_object(
              'type', 'school',
@@ -205,6 +210,12 @@ export function criarRepositorioDeRotas(bancoDeDados) {
     },
 
     async substituirParadasEMetricasDaRota({ routeId: idDaRota, userId: idDoUsuario, role: papel, stops: paradas, geometry: geometria, distanceKm: distanciaEmKm, durationMinutes: duracaoEmMinutos, fuelLiters: consumoEmLitros }) {
+      if (!Array.isArray(paradas)) throw new TypeError('A lista de paradas precisa ser um vetor.');
+      if (paradas.length > LIMITE_DE_ALUNOS_POR_ROTA) {
+        const erro = new Error(`A rota aceita no máximo ${LIMITE_DE_ALUNOS_POR_ROTA} alunos.`);
+        erro.statusCode = 400;
+        throw erro;
+      }
       const clienteDoBanco = await bancoDeDados.connect();
       try {
         await clienteDoBanco.query('BEGIN');

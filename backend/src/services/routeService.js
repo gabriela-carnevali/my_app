@@ -1,10 +1,9 @@
 import { validarLadoDireitoDaCalcada } from './geoUtils.js';
+import { LIMITE_DE_ALUNOS_POR_ROTA } from '../config/routeLimits.js';
 import { otimizarRota } from './routeOptimizer.js';
 import { gerarGeometriaDaRota } from './routingService.js';
 
 const PADRAO_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const LIMITE_DE_ALUNOS_POR_ROTA = 27;
-
 function criarErroHttp(codigoHttp, mensagem) {
   const erro = new Error(mensagem);
   erro.statusCode = codigoHttp;

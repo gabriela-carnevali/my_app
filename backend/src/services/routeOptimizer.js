@@ -1,7 +1,7 @@
 import { converterCoordenada, validarLadoDireitoDaCalcada } from './geoUtils.js';
+import { LIMITE_DE_ALUNOS_POR_ROTA } from '../config/routeLimits.js';
 
 const URL_BASE_DO_MAPBOX = 'https://api.mapbox.com';
-const LIMITE_DE_ALUNOS_POR_ROTA = 27;
 const LIMITE_DE_COORDENADAS_DA_API_TRIP = 12;
 const LIMITE_DE_COORDENADAS_DA_MATRIZ = 25;
 const TAMANHO_DO_BLOCO_DA_MATRIZ = 12;
@@ -385,7 +385,7 @@ export async function otimizarRota({
       executarRequisicao,
       montarUrlDeOtimizacao({ coordinates: coordenadasDeTodosOsPontos, token: tokenDeAcesso, profile: perfil }),
       'Mapbox Optimization API',
-    )
+    ).catch(() => null)
     : Promise.resolve(null);
   const [respostaDaOtimizacao, matrizDeDistancias] = await Promise.all([
     requisicaoTrip,

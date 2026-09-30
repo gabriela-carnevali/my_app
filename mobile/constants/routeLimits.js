@@ -1,0 +1,1 @@
+export const LIMITE_DE_ALUNOS_POR_ROTA = 27;
