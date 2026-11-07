@@ -81,6 +81,11 @@ function validarEvento(evento) {
     evento.payload.recordedAt,
     "payload.recordedAt",
   );
+  if (new Date(dataDeRegistro).getTime() > Date.now() + 5 * 60 * 1000) {
+    throw criarErroDeRequisicaoInvalida(
+      "O horário do evento não pode estar mais de cinco minutos no futuro.",
+    );
+  }
 
   if (evento.type === "attendance_status") {
     exigirUuidValido(evento.payload.studentId, "payload.studentId");

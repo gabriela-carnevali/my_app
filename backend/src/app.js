@@ -21,9 +21,21 @@ export function criarAplicacaoDaApi({ pool: bancoDeDados }) {
   aplicacao.use((_requisicao, resposta) => resposta.status(404).json({ message: 'Endpoint não encontrado.' }));
   aplicacao.use((erro, _requisicao, resposta, _proximo) => {
     console.error('Request failed:', erro.message);
-    resposta.status(erro.statusCode ?? 500).json({
-      message: erro.statusCode ? erro.message : 'Erro interno do servidor.',
-    });
+    const codigoHttp = Number.isInteger(erro.statusCode)
+      ? erro.statusCode
+      : Number.isInteger(erro.status) && erro.status >= 400 && erro.status < 500
+        ? erro.status
+        : 500;
+    const mensagem = Number.isInteger(erro.statusCode)
+      ? erro.message
+      : codigoHttp === 413
+        ? 'O corpo da requisição excede o limite de 1 MB.'
+        : codigoHttp === 400
+          ? 'O corpo JSON da requisição é inválido.'
+          : codigoHttp < 500
+            ? 'Requisição inválida.'
+            : 'Erro interno do servidor.';
+    resposta.status(codigoHttp).json({ message: mensagem });
   });
   return aplicacao;
 }

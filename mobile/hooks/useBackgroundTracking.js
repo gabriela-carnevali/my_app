@@ -33,12 +33,19 @@ async function obterBancoDeDadosLocal() {
           id TEXT PRIMARY KEY NOT NULL,
           route_id TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS route_cache (
-          route_id TEXT PRIMARY KEY NOT NULL,
+        CREATE TABLE IF NOT EXISTS route_cache_by_user (
+          user_id TEXT NOT NULL,
+          route_id TEXT NOT NULL,
           route_json TEXT NOT NULL,
-          cached_at TEXT NOT NULL
+          cached_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, route_id)
         );
       `);
+        // Acknowledged events are safe to discard: the server keeps an idempotency receipt,
+        // so a retry after a lost response is accepted without applying the event twice.
+        await bancoLocal.execAsync('DELETE FROM sync_queue WHERE synced_at IS NOT NULL;');
+        // The previous cache had no account owner; discard it to prevent cross-account exposure.
+        await bancoLocal.execAsync('DROP TABLE IF EXISTS route_cache;');
         return bancoLocal;
       })
       .catch((erro) => {
@@ -76,26 +83,28 @@ export async function enfileirarEventoOffline(tipoDoEvento, dadosDoEvento) {
   return inserirRegistroNaFila(tipoDoEvento, dadosDoEvento);
 }
 
-export async function salvarCacheDaRota(percurso) {
+export async function salvarCacheDaRota(percurso, idDoUsuario) {
   const idDaRota = percurso?.id ?? percurso?.routeId;
   if (!idDaRota)
     throw new Error(
       "É necessário informar o identificador da rota para salvá-la no cache local.",
     );
+  if (typeof idDoUsuario !== "string" || !idDoUsuario.trim())
+    throw new Error("É necessário informar o usuário para salvar a rota no cache local.");
   const bancoLocal = await obterBancoDeDadosLocal();
   await bancoLocal.runAsync(
-    `INSERT INTO route_cache (route_id, route_json, cached_at) VALUES (?, ?, ?)
-     ON CONFLICT(route_id) DO UPDATE SET route_json = excluded.route_json, cached_at = excluded.cached_at`,
-    [String(idDaRota), JSON.stringify(percurso), new Date().toISOString()],
+    `INSERT INTO route_cache_by_user (user_id, route_id, route_json, cached_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, route_id) DO UPDATE SET route_json = excluded.route_json, cached_at = excluded.cached_at`,
+    [idDoUsuario, String(idDaRota), JSON.stringify(percurso), new Date().toISOString()],
   );
 }
 
-export async function carregarRotaDoCache(idDaRota) {
-  if (!idDaRota) return null;
+export async function carregarRotaDoCache(idDaRota, idDoUsuario) {
+  if (!idDaRota || typeof idDoUsuario !== "string" || !idDoUsuario.trim()) return null;
   const bancoLocal = await obterBancoDeDadosLocal();
   const registroLocal = await bancoLocal.getFirstAsync(
-    "SELECT route_json FROM route_cache WHERE route_id = ?",
-    [String(idDaRota)],
+    "SELECT route_json FROM route_cache_by_user WHERE route_id = ? AND user_id = ?",
+    [String(idDaRota), idDoUsuario],
   );
   if (!registroLocal) return null;
   try {
@@ -103,6 +112,15 @@ export async function carregarRotaDoCache(idDaRota) {
   } catch {
     return null;
   }
+}
+
+export async function removerRotaDoCache(idDaRota, idDoUsuario) {
+  if (!idDaRota || typeof idDoUsuario !== "string" || !idDoUsuario.trim()) return;
+  const bancoLocal = await obterBancoDeDadosLocal();
+  await bancoLocal.runAsync(
+    "DELETE FROM route_cache_by_user WHERE route_id = ? AND user_id = ?",
+    [String(idDaRota), idDoUsuario],
+  );
 }
 
 async function contarEventosPendentes() {
@@ -226,6 +244,7 @@ export async function sincronizarFilaOffline({
         );
       }
     }
+    await bancoLocal.execAsync("DELETE FROM sync_queue WHERE synced_at IS NOT NULL;");
 
     return {
       sincronizados: quantidadeSincronizada,

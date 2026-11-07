@@ -25,6 +25,9 @@ module.exports = {
     },
     android: {
       package: 'br.com.transporteescolar.app',
+      // The offline SQLite database contains student names, addresses and attendance.
+      // Prevent Android cloud/device backup from copying that data outside the app sandbox.
+      allowBackup: false,
       ...(process.env.GOOGLE_MAPS_ANDROID_API_KEY
         ? { config: { googleMaps: { apiKey: process.env.GOOGLE_MAPS_ANDROID_API_KEY } } }
         : {}),

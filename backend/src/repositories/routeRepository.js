@@ -119,10 +119,8 @@ export function criarRepositorioDeRotas(bancoDeDados) {
            jsonb_build_object('id', e.id, 'name', e.nome,
              'coordinates', jsonb_build_array(ST_X(e.ponto_geog), ST_Y(e.ponto_geog))) AS school,
            jsonb_build_array(
-             COALESCE((SELECT ST_X(g.ponto) FROM gps_localizacoes g
-                        WHERE g.rota_id = r.id ORDER BY g.registrado_em DESC LIMIT 1), ST_X(v.ponto_garagem)),
-             COALESCE((SELECT ST_Y(g.ponto) FROM gps_localizacoes g
-                        WHERE g.rota_id = r.id ORDER BY g.registrado_em DESC LIMIT 1), ST_Y(v.ponto_garagem))
+             COALESCE(ST_X(gps_recente.ponto), ST_X(v.ponto_garagem)),
+             COALESCE(ST_Y(gps_recente.ponto), ST_Y(v.ponto_garagem))
            ) AS "vanCoordinates",
            COALESCE((
              SELECT jsonb_agg(jsonb_build_object(
@@ -148,6 +146,15 @@ export function criarRepositorioDeRotas(bancoDeDados) {
          FROM rotas r
          JOIN veiculos v ON v.id = r.veiculo_id
          JOIN escolas e ON e.id = r.escola_id
+          LEFT JOIN LATERAL (
+            SELECT g.ponto
+              FROM gps_localizacoes g
+             WHERE g.rota_id = r.id
+               AND g.registrado_em >= now() - interval '15 minutes'
+               AND g.registrado_em <= now() + interval '5 minutes'
+             ORDER BY g.registrado_em DESC
+             LIMIT 1
+          ) gps_recente ON true
          WHERE r.id = $1`,
         [idDaRota],
       );
