@@ -1,11 +1,14 @@
 # Transporte Escolar
 
 Aplicativo cross-platform em JavaScript: React Native com Expo no mobile, API Node.js/Express e PostgreSQL com PostGIS. O app foi organizado para operação offline do motorista, controle administrativo e cálculo de percursos para até 27 alunos.
+Aplicativo cross-platform em JavaScript: React Native com Expo no mobile, API Node.js/Express e PostgreSQL com PostGIS. O app foi organizado para operação offline do motorista, controle administrativo e cálculo de percursos para até 27 alunos.
 
+## Estrutura
 ## Estrutura
 
 ```text
 backend/
+  sql/migrations/                 # esquema PostGIS e limite transacional de 27 alunos
   sql/migrations/                 # esquema PostGIS e limite transacional de 27 alunos
   src/
     config/                       # pool PostgreSQL e constantes de negócio
@@ -17,7 +20,63 @@ backend/
     scripts/                      # configuração inicial de senhas
     app.js                        # composição Express
     server.js                     # inicialização e encerramento do servidor
+    config/                       # pool PostgreSQL e constantes de negócio
+    controllers/                  # adaptação HTTP
+    middlewares/                  # JWT, autorização e rate limit
+    repositories/                 # consultas PostgreSQL parametrizadas
+    routes/                       # endpoints Express
+    services/                     # autenticação, geometria, otimização e sincronização
+    scripts/                      # configuração inicial de senhas
+    app.js                        # composição Express
+    server.js                     # inicialização e encerramento do servidor
 mobile/
+  App.js                          # provedores da aplicação
+  app.config.js                   # configuração Expo e permissões nativas
+  navigation/                     # navegação React Navigation
+  screens/                        # login, rota, edição, aluno, admin e configurações
+  context/                        # sessão e preferências visuais
+  hooks/                          # GPS em segundo plano e fila SQLite
+  components/                     # componentes acessíveis
+```
+
+O `package-lock.json` da raiz foi removido porque não existe um `package.json` correspondente. Os lockfiles dentro de `backend/` e `mobile/` são os que fixam dependências para `npm ci`. Pastas nativas `mobile/android/` e `mobile/ios/` são geradas pelo Expo e ignoradas pelo Git.
+
+## O que o sistema faz
+
+- **Login e autorização:** autentica motoristas e administradores com JWT HS256. O backend confirma que a conta continua ativa e que o papel não foi revogado. A área de permissões e o cadastro de alunos são exibidos somente para administradores, e a API também valida essa regra.
+- **Rotas do motorista:** lista percursos ativos disponíveis ao usuário, mostra o mapa, posição GPS do aparelho, sequência de embarque, escola como destino final, distância/tempo/consumo estimados e status de cada aluno.
+- **Edição do percurso:** motorista pode incluir ou retirar alunos apenas do próprio percurso da data corrente; o backend verifica isso transacionalmente. Administradores podem editar rotas ativas. A alteração recalcula sequência e métricas.
+- **Presença offline:** status e pontos GPS entram numa fila SQLite e são enviados quando há conexão. IDs de evento e recibos no PostgreSQL tornam a reentrega idempotente. Registros já confirmados são removidos do SQLite para evitar crescimento indefinido da fila.
+- **GPS em segundo plano:** `expo-location` e `expo-task-manager` registram pontos enquanto o serviço está ativo. No Android, o app exibe a notificação do serviço em primeiro plano.
+- **Acessibilidade:** há tema do sistema, claro ou escuro, alto contraste, texto ampliado e narração das paradas em português.
+- **Limite de capacidade:** uma rota admite no máximo 27 alunos. A interface, serviços do backend e gatilho transacional da migração 004 aplicam o mesmo limite, inclusive em gravações concorrentes.
+
+### Escopo existente e itens ainda não implementados
+
+O repositório não tem telas/endpoints de criação de escolas, veículos, motoristas, responsáveis ou rotas, nem endpoints para remover uma rota concluída ou descadastrar/excluir um aluno. O cadastro de aluno existente exige escola, motorista responsável e endereço validados previamente. Para uma instalação nova, esses dados iniciais precisam ser provisionados no PostgreSQL por um processo administrativo confiável; sem uma rota e um usuário associados, o motorista poderá entrar, mas não terá percurso para abrir. Não cadastre credenciais padrão em SQL.
+
+O fluxo de navegação exibe o traçado do percurso e a localização atual do próprio aparelho; não é um navegador curva a curva e não transmite a posição em tempo real para um painel web. A fala lê a sequência de paradas, mas não interpreta instruções de manobra. O motorista continua responsável por seguir as regras de trânsito e conferir o local de embarque.
+
+## Roteamento e segurança pela calçada
+
+`backend/src/services/routeOptimizer.js` recebe a posição da van, escola e alunos. A primeira parada é fixada no aluno alcançável com menor distância viária a partir da van. A última parada de aluno é fixada no aluno restante com menor distância viária direta até a escola. A escola permanece o destino absoluto. Entre essas âncoras, o algoritmo minimiza a soma das distâncias da matriz do Mapbox e usa duração como critério de desempate. Até 10 alunos a busca é exata; de 11 a 27, é usada inserção de paradas com busca local, que é uma heurística e não garante o ótimo global.
+
+As coordenadas enviadas ao Mapbox usam `approaches=curb`. Antes de calcular, o backend exige que a fachada tenha um trecho de via orientado e valide o produto vetorial estritamente `D < 0` para o lado direito. Essa validação matemática depende da qualidade e da orientação das coordenadas fornecidas; `approaches=curb` não é uma garantia física de que o motorista consiga parar com segurança em qualquer cenário real. A [Optimization API](https://docs.mapbox.com/api/navigation/optimization-v1/) e a [Matrix API](https://docs.mapbox.com/api/navigation/matrix/) têm limites de coordenadas; por isso o sistema usa a Trip API apenas como referência para rotas curtas e divide a matriz/traçado em blocos para percursos maiores. A ordem aplicada vem do otimizador local sobre a matriz, não da sequência de referência da Trip API. O consumo exibido é uma estimativa `distância ÷ km/l` cadastrado; não modela marcha lenta, carga, aclives nem consumo medido no veículo.
+
+É necessário um token válido do Mapbox no backend para recalcular distâncias e gerar geometrias. A chave Android do Google Maps é opcional para compilar, mas é necessária para carregar os tiles do mapa no dispositivo.
+
+## API disponível
+
+Todos os endpoints abaixo, exceto `/health` e `/api/auth/login`, exigem `Authorization: Bearer <JWT>` conforme o papel e a rota.
+
+- `GET /health` — estado básico da API.
+- `POST /api/auth/login` — `{ "email", "password" }`; retorna token com expiração de 8 horas.
+- `GET /api/auth/me` — perfil atual.
+- `GET /api/routes` e `GET /api/routes/:id` — lista e consulta de percursos autorizados.
+- `GET /api/routes/:id/candidates` e `PUT /api/routes/:id/stops` — candidatos e substituição das paradas com recálculo.
+- `GET /api/schools` e `POST /api/students` — consulta de escolas e cadastro de aluno, somente admin.
+- `GET /api/admin/users` e `PATCH /api/admin/users/:id/permissions` — administração de usuários.
+- `POST /api/sync/events` — lote de até 500 eventos de presença/GPS do motorista.
   App.js                          # provedores da aplicação
   app.config.js                   # configuração Expo e permissões nativas
   navigation/                     # navegação React Navigation
@@ -138,6 +197,7 @@ Instale as dependências e inicie a API:
 
 ```powershell
 cd .\backend
+cd .\backend
 npm ci
 npm run dev
 ```
@@ -175,6 +235,17 @@ npx expo install --check
 npx expo prebuild --platform android
 ```
 
+### 5. Abra e rode no Android Studio
+
+1. Inicie o Android Studio e selecione **Open**; escolha a pasta `mobile/android`.
+2. Aguarde o Gradle sincronizar. Selecione JDK 17 em **File > Settings > Build, Execution, Deployment > Build Tools > Gradle > Gradle JDK**.
+3. No **Device Manager**, crie/inicie um emulador API 36 ou conecte o aparelho por USB, habilite **Developer options > USB debugging** e confirme o diálogo de autorização no aparelho.
+4. Confira o dispositivo com `adb devices`. Se aparecer `unauthorized`, aceite a autorização na tela do Android e execute o comando novamente.
+5. No modo debug, mantenha o Metro ativo: em outro terminal, dentro de `mobile`, execute `npx expo start`. Depois selecione a configuração `app` no Android Studio e pressione **Run**. Também pode executar `npm run android` em `mobile`; esse comando faz o build/instalação e inicia o fluxo Expo. `.\gradlew.bat installDebug` apenas instala o APK debug e não inicia o Metro.
+6. Entre com o e-mail e senha criados no backend. Abra uma rota ativa atribuída ao motorista; para editar, a rota deve ser do dia corrente se o usuário for motorista.
+7. Ao iniciar o GPS, permita localização em primeiro plano e em segundo plano. O Android mantém uma notificação enquanto o serviço de localização está ativo.
+
+Outra opção é executar `npm run android` dentro de `mobile`; o Expo chama o build nativo e instala o app no dispositivo/emulador selecionado. O rastreamento em segundo plano exige o build nativo; não funciona no Expo Go.
 ### 5. Abra e rode no Android Studio
 
 1. Inicie o Android Studio e selecione **Open**; escolha a pasta `mobile/android`.
