@@ -184,7 +184,7 @@ function somarTrechoDaRota(trechoRestante, distanciaEmMetros, duracaoEmSegundos)
   };
 }
 
-function resolverPercursoAbertoAncorado(matrizDeDistancias, matrizDeDuracoes, indiceDoPrimeiroAluno) {
+function resolverPercursoAbertoAncorado(matrizDeDistancias, matrizDeDuracoes, indiceDoPrimeiroAluno, indiceDoUltimoAluno) {
   const quantidadeDeAlunos = matrizDeDistancias.length - 2;
   const indiceDaEscolaNaMatriz = quantidadeDeAlunos + 1;
   if (quantidadeDeAlunos === 0) {
@@ -194,8 +194,22 @@ function resolverPercursoAbertoAncorado(matrizDeDistancias, matrizDeDuracoes, in
     return { indicesDosAlunos: [], distanciaEmMetros, duracaoEmSegundos };
   }
 
+  if (quantidadeDeAlunos === 1) {
+    if (indiceDoPrimeiroAluno !== indiceDoUltimoAluno) return null;
+    const distanciaVanAluno = matrizDeDistancias[0][indiceDoPrimeiroAluno + 1];
+    const duracaoVanAluno = matrizDeDuracoes[0][indiceDoPrimeiroAluno + 1];
+    const distanciaAlunoEscola = matrizDeDistancias[indiceDoPrimeiroAluno + 1][indiceDaEscolaNaMatriz];
+    const duracaoAlunoEscola = matrizDeDuracoes[indiceDoPrimeiroAluno + 1][indiceDaEscolaNaMatriz];
+    if ([distanciaVanAluno, duracaoVanAluno, distanciaAlunoEscola, duracaoAlunoEscola].some((valor) => valor == null)) return null;
+    return {
+      indicesDosAlunos: [indiceDoPrimeiroAluno],
+      distanciaEmMetros: distanciaVanAluno + distanciaAlunoEscola,
+      duracaoEmSegundos: duracaoVanAluno + duracaoAlunoEscola,
+    };
+  }
+
   const indicesDeAlunosRestantes = Array.from({ length: quantidadeDeAlunos }, (_, indice) => indice)
-    .filter((indice) => indice !== indiceDoPrimeiroAluno);
+    .filter((indice) => indice !== indiceDoPrimeiroAluno && indice !== indiceDoUltimoAluno);
   const solucoesMemorizadas = new Map();
 
   function visitarAluno(indiceDoAlunoAtual, mascaraDeAlunosRestantes) {
@@ -204,11 +218,18 @@ function resolverPercursoAbertoAncorado(matrizDeDistancias, matrizDeDuracoes, in
 
     const indiceDoNoAtual = indiceDoAlunoAtual + 1;
     if (mascaraDeAlunosRestantes === 0) {
-      const distanciaEmMetros = matrizDeDistancias[indiceDoNoAtual][indiceDaEscolaNaMatriz];
-      const duracaoEmSegundos = matrizDeDuracoes[indiceDoNoAtual][indiceDaEscolaNaMatriz];
-      const solucao = distanciaEmMetros == null || duracaoEmSegundos == null
+      const indiceDoUltimoNo = indiceDoUltimoAluno + 1;
+      const distanciaAteOUltimoAluno = matrizDeDistancias[indiceDoNoAtual][indiceDoUltimoNo];
+      const duracaoAteOUltimoAluno = matrizDeDuracoes[indiceDoNoAtual][indiceDoUltimoNo];
+      const distanciaDoUltimoAlunoAteAEscola = matrizDeDistancias[indiceDoUltimoNo][indiceDaEscolaNaMatriz];
+      const duracaoDoUltimoAlunoAteAEscola = matrizDeDuracoes[indiceDoUltimoNo][indiceDaEscolaNaMatriz];
+      const solucao = [distanciaAteOUltimoAluno, duracaoAteOUltimoAluno, distanciaDoUltimoAlunoAteAEscola, duracaoDoUltimoAlunoAteAEscola].some((valor) => valor == null)
         ? null
-        : { indicesDosAlunos: [], distanciaEmMetros, duracaoEmSegundos };
+        : {
+          indicesDosAlunos: [indiceDoUltimoAluno],
+          distanciaEmMetros: distanciaAteOUltimoAluno + distanciaDoUltimoAlunoAteAEscola,
+          duracaoEmSegundos: duracaoAteOUltimoAluno + duracaoDoUltimoAlunoAteAEscola,
+        };
       solucoesMemorizadas.set(chaveDaSolucao, solucao);
       return solucao;
     }
@@ -273,15 +294,17 @@ function calcularCustoDaSequencia(indicesDosAlunos, matrizDeDistancias, matrizDe
   };
 }
 
-function construirPercursoPorInsercao(indiceDoPrimeiroAluno, quantidadeDeAlunos, matrizDeDistancias, matrizDeDuracoes) {
-  let indicesDosAlunos = [indiceDoPrimeiroAluno];
+function construirPercursoPorInsercao(indiceDoPrimeiroAluno, indiceDoUltimoAluno, quantidadeDeAlunos, matrizDeDistancias, matrizDeDuracoes) {
+  let indicesDosAlunos = indiceDoPrimeiroAluno === indiceDoUltimoAluno
+    ? [indiceDoPrimeiroAluno]
+    : [indiceDoPrimeiroAluno, indiceDoUltimoAluno];
   const indicesRestantes = new Set(Array.from({ length: quantidadeDeAlunos }, (_, indice) => indice)
-    .filter((indice) => indice !== indiceDoPrimeiroAluno));
+    .filter((indice) => indice !== indiceDoPrimeiroAluno && indice !== indiceDoUltimoAluno));
 
   while (indicesRestantes.size > 0) {
     let melhorInsercao = null;
     for (const indiceDoAluno of indicesRestantes) {
-      for (let indiceDeInsercao = 1; indiceDeInsercao <= indicesDosAlunos.length; indiceDeInsercao += 1) {
+      for (let indiceDeInsercao = 1; indiceDeInsercao < indicesDosAlunos.length; indiceDeInsercao += 1) {
         const novaSequencia = [...indicesDosAlunos];
         novaSequencia.splice(indiceDeInsercao, 0, indiceDoAluno);
         const custoDaSequencia = calcularCustoDaSequencia(novaSequencia, matrizDeDistancias, matrizDeDuracoes);
@@ -310,17 +333,17 @@ function melhorarPercursoPorBuscaLocal(indicesIniciais, matrizDeDistancias, matr
       if (custo && objetivoEhMelhor(custo, melhorCandidato?.custo)) melhorCandidato = { sequencia, custo };
     };
 
-    for (let inicio = 1; inicio < indicesDosAlunos.length; inicio += 1) {
-      for (let fim = inicio + 1; fim < indicesDosAlunos.length; fim += 1) {
+    for (let inicio = 1; inicio < indicesDosAlunos.length - 1; inicio += 1) {
+      for (let fim = inicio + 1; fim < indicesDosAlunos.length - 1; fim += 1) {
         const sequenciaInvertida = [...indicesDosAlunos];
         sequenciaInvertida.splice(inicio, fim - inicio + 1, ...indicesDosAlunos.slice(inicio, fim + 1).reverse());
         avaliarCandidato(sequenciaInvertida);
       }
     }
 
-    for (let indiceMovido = 1; indiceMovido < indicesDosAlunos.length; indiceMovido += 1) {
+    for (let indiceMovido = 1; indiceMovido < indicesDosAlunos.length - 1; indiceMovido += 1) {
       const sequenciaSemAluno = indicesDosAlunos.filter((_, indice) => indice !== indiceMovido);
-      for (let indiceDeInsercao = 1; indiceDeInsercao <= sequenciaSemAluno.length; indiceDeInsercao += 1) {
+      for (let indiceDeInsercao = 1; indiceDeInsercao < sequenciaSemAluno.length; indiceDeInsercao += 1) {
         const sequenciaReorganizada = [...sequenciaSemAluno];
         sequenciaReorganizada.splice(indiceDeInsercao, 0, indicesDosAlunos[indiceMovido]);
         avaliarCandidato(sequenciaReorganizada);
@@ -420,33 +443,56 @@ export async function otimizarRota({
   }
 
   let indiceDoPrimeiroAluno = null;
+  let indiceDoUltimoAluno = null;
   let solucaoDaRota = null;
   if (alunosComCoordenadasValidadas.length === 0) {
-    solucaoDaRota = resolverPercursoAbertoAncorado(matrizDeDistancias.distances, matrizDeDistancias.durations, null);
-  } else if (alunosComCoordenadasValidadas.length > LIMITE_DE_COORDENADAS_DA_API_TRIP - 2) {
-    const candidatoMaisProximo = candidatosAPrimeiraParada[0];
-    const sequenciaDeInsercao = construirPercursoPorInsercao(
-      candidatoMaisProximo.indice,
-      alunosComCoordenadasValidadas.length,
-      matrizDeDistancias.distances,
-      matrizDeDistancias.durations,
-    );
-    if (sequenciaDeInsercao) {
-      indiceDoPrimeiroAluno = candidatoMaisProximo.indice;
-      solucaoDaRota = melhorarPercursoPorBuscaLocal(
-        sequenciaDeInsercao,
+    solucaoDaRota = resolverPercursoAbertoAncorado(matrizDeDistancias.distances, matrizDeDistancias.durations, null, null);
+  } else {
+    indiceDoPrimeiroAluno = candidatosAPrimeiraParada[0].indice;
+    if (alunosComCoordenadasValidadas.length === 1) {
+      indiceDoUltimoAluno = indiceDoPrimeiroAluno;
+    } else {
+      const indiceDaEscolaNaMatriz = alunosComCoordenadasValidadas.length + 1;
+      const candidatosAUltimaParada = alunosComCoordenadasValidadas
+        .map((_aluno, indice) => ({
+          indice,
+          distanciaEmMetros: matrizDeDistancias.distances[indice + 1]?.[indiceDaEscolaNaMatriz],
+          duracaoEmSegundos: matrizDeDistancias.durations[indice + 1]?.[indiceDaEscolaNaMatriz],
+        }))
+        .filter((candidato) => candidato.indice !== indiceDoPrimeiroAluno
+          && candidato.distanciaEmMetros != null && candidato.duracaoEmSegundos != null)
+        .sort((candidatoEsquerdo, candidatoDireito) => (
+          candidatoEsquerdo.distanciaEmMetros - candidatoDireito.distanciaEmMetros
+          || candidatoEsquerdo.duracaoEmSegundos - candidatoDireito.duracaoEmSegundos
+        ));
+      if (candidatosAUltimaParada.length === 0) {
+        throw new Error('Nenhum aluno alcançável pode ser a última parada antes da escola.');
+      }
+      indiceDoUltimoAluno = candidatosAUltimaParada[0].indice;
+    }
+
+    if (alunosComCoordenadasValidadas.length > LIMITE_DE_COORDENADAS_DA_API_TRIP - 2) {
+      const sequenciaDeInsercao = construirPercursoPorInsercao(
+        indiceDoPrimeiroAluno,
+        indiceDoUltimoAluno,
+        alunosComCoordenadasValidadas.length,
         matrizDeDistancias.distances,
         matrizDeDistancias.durations,
       );
-    }
-  } else {
-    for (const candidato of candidatosAPrimeiraParada) {
-      const solucaoCandidata = resolverPercursoAbertoAncorado(matrizDeDistancias.distances, matrizDeDistancias.durations, candidato.indice);
-      if (solucaoCandidata) {
-        indiceDoPrimeiroAluno = candidato.indice;
-        solucaoDaRota = solucaoCandidata;
-        break;
+      if (sequenciaDeInsercao) {
+        solucaoDaRota = melhorarPercursoPorBuscaLocal(
+          sequenciaDeInsercao,
+          matrizDeDistancias.distances,
+          matrizDeDistancias.durations,
+        );
       }
+    } else {
+      solucaoDaRota = resolverPercursoAbertoAncorado(
+        matrizDeDistancias.distances,
+        matrizDeDistancias.durations,
+        indiceDoPrimeiroAluno,
+        indiceDoUltimoAluno,
+      );
     }
   }
   if (!solucaoDaRota) throw new Error('Não existe percurso compatível com a calçada que passe por todos os alunos e termine na escola.');
@@ -489,6 +535,8 @@ export async function otimizarRota({
       tieBreaker: 'duration_seconds',
       originFixed: true,
       destinationFixed: true,
+      firstStopAnchor: 'shortest_reachable_distance_from_van',
+      lastStopAnchor: 'shortest_reachable_distance_to_school_among_remaining_students',
       approaches: 'curb',
       mapboxTripBaselineStudentIndexes: indicesDeReferenciaDoMapbox,
     },

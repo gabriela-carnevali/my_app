@@ -55,12 +55,18 @@ export function exigirPapel(...papeisPermitidos) {
 
 export function criarLimitadorDeTentativasDeLogin({ maxFailures: maximoDeFalhas = 5, windowMs: intervaloDeBloqueioMs = 15 * 60 * 1000 } = {}) {
   const faixasDeTentativas = new Map();
+  const LIMITE_DE_CLIENTES_EM_MEMORIA = 5000;
 
   function obterFaixaDeTentativas(chaveDaFaixa) {
     const instanteAtual = Date.now();
-    if (faixasDeTentativas.size > 5000) {
+    if (faixasDeTentativas.size >= LIMITE_DE_CLIENTES_EM_MEMORIA && !faixasDeTentativas.has(chaveDaFaixa)) {
       for (const [chaveArmazenada, faixaArmazenada] of faixasDeTentativas) {
         if (faixaArmazenada.limiteReiniciaEm <= instanteAtual) faixasDeTentativas.delete(chaveArmazenada);
+      }
+      while (faixasDeTentativas.size >= LIMITE_DE_CLIENTES_EM_MEMORIA) {
+        const chaveMaisAntiga = faixasDeTentativas.keys().next().value;
+        if (chaveMaisAntiga === undefined) break;
+        faixasDeTentativas.delete(chaveMaisAntiga);
       }
     }
     let faixaDeTentativas = faixasDeTentativas.get(chaveDaFaixa);

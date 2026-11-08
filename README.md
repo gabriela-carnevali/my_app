@@ -1,100 +1,203 @@
 # Transporte Escolar
 
-Aplicativo cross-platform em JavaScript com Expo/React Native, API Node.js/Express e PostgreSQL/PostGIS.
+Aplicativo cross-platform em JavaScript: React Native com Expo no mobile, API Node.js/Express e PostgreSQL com PostGIS. O app foi organizado para operação offline do motorista, controle administrativo e cálculo de percursos para até 27 alunos.
 
-## Estrutura do projeto
+## Estrutura
 
 ```text
 backend/
-  sql/migrations/001_initial_schema.sql ... 004_route_stop_limit_27.sql
+  sql/migrations/                 # esquema PostGIS e limite transacional de 27 alunos
   src/
-    config/database.js
-    config/routeLimits.js
-    controllers/
-    middlewares/auth.js
-    repositories/
-    routes/
-    services/
-    app.js
-    server.js
+    config/                       # pool PostgreSQL e constantes de negócio
+    controllers/                  # adaptação HTTP
+    middlewares/                  # JWT, autorização e rate limit
+    repositories/                 # consultas PostgreSQL parametrizadas
+    routes/                       # endpoints Express
+    services/                     # autenticação, geometria, otimização e sincronização
+    scripts/                      # configuração inicial de senhas
+    app.js                        # composição Express
+    server.js                     # inicialização e encerramento do servidor
 mobile/
-  App.js
-  constants/routeLimits.js
-  index.js
-  context/AuthContext.js
-  context/AppearanceContext.js
-  components/AccessibleText.jsx
-  navigation/AppNavigator.js
-  screens/LoginScreen.jsx
-  screens/HomeScreen.jsx
-  screens/DriverRouteScreen.jsx
-  screens/RouteEditorScreen.jsx
-  screens/NewStudentScreen.jsx
-  screens/AdminPermissionsScreen.jsx
-  screens/SettingsScreen.jsx
-  hooks/useBackgroundTracking.js
+  App.js                          # provedores da aplicação
+  app.config.js                   # configuração Expo e permissões nativas
+  navigation/                     # navegação React Navigation
+  screens/                        # login, rota, edição, aluno, admin e configurações
+  context/                        # sessão e preferências visuais
+  hooks/                          # GPS em segundo plano e fila SQLite
+  components/                     # componentes acessíveis
 ```
 
-No backend, `app.js` configura o Express e monta as rotas; `server.js` inicia e encerra o servidor; controllers recebem as requisições; services concentram validações e regras de negócio; repositories acessam o PostgreSQL; e `config/` fornece o pool de conexões.
+O `package-lock.json` da raiz foi removido porque não existe um `package.json` correspondente. Os lockfiles dentro de `backend/` e `mobile/` são os que fixam dependências para `npm ci`. Pastas nativas `mobile/android/` e `mobile/ios/` são geradas pelo Expo e ignoradas pelo Git.
 
-## Backend
+## O que o sistema faz
 
-Use Node.js 22.13 ou superior. Em um PostgreSQL com PostGIS, aplique em ordem as quatro migrações de `backend/sql/migrations`, de `001_initial_schema.sql` a `004_route_stop_limit_27.sql`. A quarta migração adiciona ao banco um bloqueio transacional para impedir que qualquer rota receba um 28º aluno. Na primeira execução, crie o `.env` somente se ele ainda não existir e preencha a conexão com o banco, o token Mapbox e um segredo JWT aleatório com pelo menos 32 bytes:
+- **Login e autorização:** autentica motoristas e administradores com JWT HS256. O backend confirma que a conta continua ativa e que o papel não foi revogado. A área de permissões e o cadastro de alunos são exibidos somente para administradores, e a API também valida essa regra.
+- **Rotas do motorista:** lista percursos ativos disponíveis ao usuário, mostra o mapa, posição GPS do aparelho, sequência de embarque, escola como destino final, distância/tempo/consumo estimados e status de cada aluno.
+- **Edição do percurso:** motorista pode incluir ou retirar alunos apenas do próprio percurso da data corrente; o backend verifica isso transacionalmente. Administradores podem editar rotas ativas. A alteração recalcula sequência e métricas.
+- **Presença offline:** status e pontos GPS entram numa fila SQLite e são enviados quando há conexão. IDs de evento e recibos no PostgreSQL tornam a reentrega idempotente. Registros já confirmados são removidos do SQLite para evitar crescimento indefinido da fila.
+- **GPS em segundo plano:** `expo-location` e `expo-task-manager` registram pontos enquanto o serviço está ativo. No Android, o app exibe a notificação do serviço em primeiro plano.
+- **Acessibilidade:** há tema do sistema, claro ou escuro, alto contraste, texto ampliado e narração das paradas em português.
+- **Limite de capacidade:** uma rota admite no máximo 27 alunos. A interface, serviços do backend e gatilho transacional da migração 004 aplicam o mesmo limite, inclusive em gravações concorrentes.
+
+### Escopo existente e itens ainda não implementados
+
+O repositório não tem telas/endpoints de criação de escolas, veículos, motoristas, responsáveis ou rotas, nem endpoints para remover uma rota concluída ou descadastrar/excluir um aluno. O cadastro de aluno existente exige escola, motorista responsável e endereço validados previamente. Para uma instalação nova, esses dados iniciais precisam ser provisionados no PostgreSQL por um processo administrativo confiável; sem uma rota e um usuário associados, o motorista poderá entrar, mas não terá percurso para abrir. Não cadastre credenciais padrão em SQL.
+
+O fluxo de navegação exibe o traçado do percurso e a localização atual do próprio aparelho; não é um navegador curva a curva e não transmite a posição em tempo real para um painel web. A fala lê a sequência de paradas, mas não interpreta instruções de manobra. O motorista continua responsável por seguir as regras de trânsito e conferir o local de embarque.
+
+## Roteamento e segurança pela calçada
+
+`backend/src/services/routeOptimizer.js` recebe a posição da van, escola e alunos. A primeira parada é fixada no aluno alcançável com menor distância viária a partir da van. A última parada de aluno é fixada no aluno restante com menor distância viária direta até a escola. A escola permanece o destino absoluto. Entre essas âncoras, o algoritmo minimiza a soma das distâncias da matriz do Mapbox e usa duração como critério de desempate. Até 10 alunos a busca é exata; de 11 a 27, é usada inserção de paradas com busca local, que é uma heurística e não garante o ótimo global.
+
+As coordenadas enviadas ao Mapbox usam `approaches=curb`. Antes de calcular, o backend exige que a fachada tenha um trecho de via orientado e valide o produto vetorial estritamente `D < 0` para o lado direito. Essa validação matemática depende da qualidade e da orientação das coordenadas fornecidas; `approaches=curb` não é uma garantia física de que o motorista consiga parar com segurança em qualquer cenário real. A [Optimization API](https://docs.mapbox.com/api/navigation/optimization-v1/) e a [Matrix API](https://docs.mapbox.com/api/navigation/matrix/) têm limites de coordenadas; por isso o sistema usa a Trip API apenas como referência para rotas curtas e divide a matriz/traçado em blocos para percursos maiores. A ordem aplicada vem do otimizador local sobre a matriz, não da sequência de referência da Trip API. O consumo exibido é uma estimativa `distância ÷ km/l` cadastrado; não modela marcha lenta, carga, aclives nem consumo medido no veículo.
+
+É necessário um token válido do Mapbox no backend para recalcular distâncias e gerar geometrias. A chave Android do Google Maps é opcional para compilar, mas é necessária para carregar os tiles do mapa no dispositivo.
+
+## API disponível
+
+Todos os endpoints abaixo, exceto `/health` e `/api/auth/login`, exigem `Authorization: Bearer <JWT>` conforme o papel e a rota.
+
+- `GET /health` — estado básico da API.
+- `POST /api/auth/login` — `{ "email", "password" }`; retorna token com expiração de 8 horas.
+- `GET /api/auth/me` — perfil atual.
+- `GET /api/routes` e `GET /api/routes/:id` — lista e consulta de percursos autorizados.
+- `GET /api/routes/:id/candidates` e `PUT /api/routes/:id/stops` — candidatos e substituição das paradas com recálculo.
+- `GET /api/schools` e `POST /api/students` — consulta de escolas e cadastro de aluno, somente admin.
+- `GET /api/admin/users` e `PATCH /api/admin/users/:id/permissions` — administração de usuários.
+- `POST /api/sync/events` — lote de até 500 eventos de presença/GPS do motorista.
+
+## Instalação local no Windows
+
+### 1. Instale as ferramentas
+
+- Node.js 22.13 ou superior e npm.
+- PostgreSQL e a versão do PostGIS compatível com essa instalação. A primeira migração habilita `postgis` e `pgcrypto`; os pacotes das extensões precisam estar instalados no servidor.
+- Android Studio, Android SDK Platform 36, Android SDK Build-Tools 36 e Android NDK `27.1.12297006`.
+- JDK 17. Configure o JDK 17 como **Gradle JDK** no Android Studio. A configuração de build validada neste projeto falha com JDK 25 na etapa CMake/Prefab.
+- Um emulador Android ou um aparelho Android com depuração USB habilitada.
+
+**Importante no Windows:** este checkout está numa pasta OneDrive com caminho longo. Aqui, o CMake excedeu o limite de caminho e o Metro não resolveu arquivos do React a partir da árvore em OneDrive. Use um clone/cópia do projeto em caminho local curto, por exemplo `C:\dev\transporte-escolar`, fora do OneDrive, e reinstale as dependências (`npm ci`) nessa cópia. Mapear com `subst` permitiu compilar o APK neste computador, mas não corrigiu o bundle do Metro.
+
+Para copiar o checkout atual preservando o Git, mas sem transferir `.env`, dependências ou builds gerados, use uma pasta de destino nova:
 
 ```powershell
-cd backend
-if (-not (Test-Path ..\.env)) { Copy-Item ..\.env.example ..\.env }
-node --input-type=module -e "import { randomBytes } from 'node:crypto'; console.log(randomBytes(48).toString('base64url'))"
-# Cole o segredo impresso em JWT_SECRET no arquivo ..\.env e preencha DATABASE_URL e MAPBOX_ACCESS_TOKEN.
+robocopy $PWD C:\dev\transporte-escolar /E /XD node_modules android ios .expo dist build /XF .env
+if ($LASTEXITCODE -ge 8) { throw "Falha ao copiar o projeto: $LASTEXITCODE" }
+Set-Location C:\dev\transporte-escolar
+```
+
+Crie novamente os arquivos `.env` locais a partir dos `.env.example` na cópia e reinstale as dependências dos dois projetos.
+
+Confira as ferramentas no PowerShell:
+
+```powershell
+node --version
+npm --version
+psql --version
+adb version
+```
+
+Se `psql` ou `adb` não forem encontrados, adicione ao `PATH` as pastas `bin` do PostgreSQL e `platform-tools` do Android SDK, ou use os caminhos completos. No Android Studio, abra **Tools > SDK Manager** e instale as plataformas, build tools e NDK indicados acima.
+
+### 2. Crie o banco e aplique as migrações
+
+No terminal do projeto, crie o banco (o comando pede a senha do usuário PostgreSQL):
+
+```powershell
+createdb -U postgres -W transporte_escolar
+```
+
+Execute as migrações em ordem e interrompa ao primeiro erro:
+
+```powershell
+Get-Content .\backend\sql\migrations\001_initial_schema.sql | psql -U postgres -W -d transporte_escolar -v ON_ERROR_STOP=1
+Get-Content .\backend\sql\migrations\002_driver_auth.sql | psql -U postgres -W -d transporte_escolar -v ON_ERROR_STOP=1
+Get-Content .\backend\sql\migrations\003_roles_and_route_day.sql | psql -U postgres -W -d transporte_escolar -v ON_ERROR_STOP=1
+Get-Content .\backend\sql\migrations\004_route_stop_limit_27.sql | psql -U postgres -W -d transporte_escolar -v ON_ERROR_STOP=1
+```
+
+Confirme o PostGIS com `psql -U postgres -d transporte_escolar -c "SELECT PostGIS_Full_Version();"`. Se uma migração parar porque uma extensão não está disponível, instale o pacote PostGIS da mesma versão principal do PostgreSQL e repita a migração que falhou.
+
+### 3. Configure e inicie o backend
+
+Crie o arquivo local `.env` a partir do modelo (o `.gitignore` já o exclui):
+
+```powershell
+if (-not (Test-Path .\.env)) { Copy-Item .\.env.example .\.env }
+```
+
+Edite `.env` na raiz e ajuste `DATABASE_URL` para usuário, senha, host e nome do banco locais; mantenha `DATABASE_SSL=false` apenas em ambiente local. Gere um segredo JWT aleatório com pelo menos 32 bytes e cole em `JWT_SECRET`:
+
+```powershell
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
+```
+
+Crie ou selecione um token ativo no [painel de tokens do Mapbox](https://console.mapbox.com/account/access-tokens/) com acesso às APIs Directions, Matrix e Optimization usadas pelo roteamento. Preencha `MAPBOX_ACCESS_TOKEN` somente no `.env` raiz; não o coloque em `EXPO_PUBLIC_*`, no código mobile ou no Git. Guarde o mesmo `JWT_SECRET` nas próximas inicializações; alterá-lo encerra as sessões existentes.
+
+Instale as dependências e inicie a API:
+
+```powershell
+cd .\backend
 npm ci
-npm run set-driver-password
 npm run dev
 ```
 
-Os scripts do backend carregam automaticamente o `.env` da raiz do projeto. O `.gitignore` exclui os arquivos `.env` locais e mantém os modelos `.env.example` versionáveis. O arquivo raiz `.env` guarda configurações privadas do backend; `mobile/.env` guarda o endereço público da API e a chave Android opcional do Google Maps. Para o emulador Android, o endereço padrão é `http://10.0.2.2:3000`; em um aparelho físico, use o IP do computador na rede local. Não coloque o token secreto do Mapbox em uma variável `EXPO_PUBLIC_`.
-
-`npm run set-driver-password` solicita o e-mail e a nova senha duas vezes no terminal; a senha precisa ter ao menos 12 caracteres e é armazenada com scrypt. O motorista precisa existir, estar ativo e ter e-mail cadastrado. Mantenha o mesmo `JWT_SECRET` nas próximas inicializações e em todas as instâncias da API; alterá-lo invalida os JWTs existentes.
-
-Para provisionar a primeira conta administrativa, use `npm run set-admin-password`; ele configura a senha e promove o usuário selecionado a administrador. O backend impede que o último administrador ativo seja removido.
-
-A API escuta em `http://localhost:3000`. Endpoints de autenticação e operação:
-
-- `GET /health`
-- `POST /api/auth/login` — recebe `{ "email", "password" }` e devolve JWT HS256 com validade de 8 horas e perfil do motorista.
-- `GET /api/auth/me` — valida o bearer token e retorna o perfil ativo.
-- `GET /api/routes/:id` — exige JWT válido, verifica atribuição do motorista (ou papel admin), valida cada parada pela calçada direita e monta/persiste a geometria se houver token Mapbox.
-- `GET /api/routes` — lista rotas ativas do dia para o motorista autenticado, ou rotas ativas disponíveis para admin.
-- `GET /api/routes/:id/candidates` e `PUT /api/routes/:id/stops` — listam alunos ativos da escola da rota e aplicam inclusões/remoções apenas às paradas dessa rota, recalculando sequência, geometria, distância e consumo. Motoristas só editam a própria rota da data corrente; administradores podem editar qualquer rota ativa.
-- `GET /api/schools` e `POST /api/students` — listagem de escolas e cadastro de aluno/endereço, ambos exclusivos de administrador. O cadastro valida que a fachada esteja à direita do segmento orientado.
-- `GET /api/admin/users` e `PATCH /api/admin/users/:id/permissions` — controle de papéis e contas, exclusivo de administradores.
-- `POST /api/sync/events` — recebe eventos de presença e GPS, valida acesso às rotas e grava os eventos com deduplicação.
-
-O servidor assina e valida os JWTs com HS256, `iss`/`aud` fixos e claims `sub`, `role`, `iat` e `exp`; `JWT_SECRET` deve ter pelo menos 32 bytes. O login limita a cinco tentativas inválidas por IP a cada 15 minutos por processo. Se executar várias instâncias, substitua esse limitador em memória por um armazenamento compartilhado. Em produção, sirva a API por HTTPS.
-
-## Mobile e Android Studio
-
-`mobile/App.js` é a raiz visual do app e `mobile/index.js` registra o componente no Expo. A navegação usa React Navigation. A tela GPS existente exibe a posição atual da van, rastreia em segundo plano e pode narrar as paradas. `RouteEditorScreen.jsx` edita os alunos do percurso de um dia; `NewStudentScreen.jsx` e `AdminPermissionsScreen.jsx` só aparecem para admins, com autorização também no backend. `SettingsScreen.jsx` oferece tema do sistema/claro/escuro, alto contraste, texto ampliado e narração; as preferências ficam salvas no dispositivo. O JWT fica no SecureStore do Android/iOS; ao expirar, o app retorna ao login. A fila offline em SQLite é mantida ao sair da sessão e sincroniza após novo login.
-
-O mobile usa Expo SDK 57 com React Native 0.86.3 e React 19.2.3; os módulos nativos estão alinhados às versões compatíveis do SDK. `mobile/package-lock.json` registra a árvore validada. O `app.config.js` define os identificadores nativos `br.com.transporteescolar.app` para Android e iOS.
-
-No PowerShell, copie e ajuste o ambiente do app e prepare o projeto Android nativo:
+Em outro PowerShell, verifique `http://localhost:3000/health`. Para o primeiro login, crie uma conta sem senha (senha será definida pelo utilitário interativo):
 
 ```powershell
-cd mobile
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+psql -U postgres -d transporte_escolar -c "INSERT INTO motoristas (nome, email, role, ativo) VALUES ('Administrador local', 'admin@local.test', 'driver', true) ON CONFLICT (email) DO NOTHING;"
+```
+
+Depois, `npm run set-admin-password` pede o e-mail e a senha, e promove a conta a admin. Para cadastrar um motorista inicial, insira outra linha em `motoristas` com `role='driver'` e execute `npm run set-driver-password`. Ambos os utilitários exigem senha com pelo menos 12 caracteres.
+
+Depois, importe ou cadastre no banco a escola, o veículo, os motoristas, os alunos/endereço e pelo menos uma rota/parada válidos. Esta preparação inicial ainda não tem uma tela de provisionamento. No endereço de cada aluno, `trecho_via` precisa ser uma linha orientada cuja fachada esteja à direita (`D < 0`).
+
+### 4. Configure o mobile e o mapa
+
+Em um novo terminal PowerShell:
+
+```powershell
+cd .\mobile
+if (-not (Test-Path .\.env)) { Copy-Item .\.env.example .\.env }
+```
+
+Edite `mobile/.env`:
+
+- Emulador Android: `EXPO_PUBLIC_API_URL=http://10.0.2.2:3000`.
+- Aparelho físico: use o IPv4 do computador na rede local, por exemplo `http://192.168.0.20:3000`. O celular e o computador precisam estar na mesma rede. Se o Firewall do Windows bloquear a conexão, permita tráfego TCP de entrada na porta 3000 somente na rede privada.
+- Para tiles no build Android nativo, crie uma chave no Google Cloud, habilite o Maps SDK for Android e restrinja a chave ao app Android `br.com.transporteescolar.app` (inclua o SHA-1 do certificado debug obtido por `mobile/android/gradlew.bat signingReport`) e somente ao Maps SDK for Android. Configure `GOOGLE_MAPS_ANDROID_API_KEY` em `mobile/.env`, rode `npx expo prebuild --platform android` e reconstrua o app. A chave entra no pacote nativo: restrições de app/API são obrigatórias; não a reutilize no backend.
+
+Instale dependências e gere os arquivos nativos Android a partir da configuração Expo:
+
+```powershell
 npm ci
 npx expo install --check
 npx expo prebuild --platform android
 ```
 
-No emulador Android, `10.0.2.2` aponta para o computador host. Para aparelho físico, use o endereço IP da máquina na rede local. Motoristas e admins entram com e-mail e senha provisionados pela gestão. Informe o ID da rota para abrir ou editar o percurso do dia. O cadastro exige coordenadas WGS84 da fachada e dos extremos do segmento de rua, orientado com a fachada à direita.
+### 5. Abra e rode no Android Studio
 
-Abra a pasta `mobile/android` no Android Studio e execute o app pelo IDE. Também é possível compilar/instalar via Expo com `npm run android`, desde que Android Studio, JDK, Android SDK e um emulador/dispositivo estejam configurados. `npx expo prebuild` gera a pasta `android/` localmente a partir do JavaScript e da configuração Expo; ela é ignorada pelo Git e pode ser recriada a qualquer momento.
+1. Inicie o Android Studio e selecione **Open**; escolha a pasta `mobile/android`.
+2. Aguarde o Gradle sincronizar. Selecione JDK 17 em **File > Settings > Build, Execution, Deployment > Build Tools > Gradle > Gradle JDK**.
+3. No **Device Manager**, crie/inicie um emulador API 36 ou conecte o aparelho por USB, habilite **Developer options > USB debugging** e confirme o diálogo de autorização no aparelho.
+4. Confira o dispositivo com `adb devices`. Se aparecer `unauthorized`, aceite a autorização na tela do Android e execute o comando novamente.
+5. No modo debug, mantenha o Metro ativo: em outro terminal, dentro de `mobile`, execute `npx expo start`. Depois selecione a configuração `app` no Android Studio e pressione **Run**. Também pode executar `npm run android` em `mobile`; esse comando faz o build/instalação e inicia o fluxo Expo. `.\gradlew.bat installDebug` apenas instala o APK debug e não inicia o Metro.
+6. Entre com o e-mail e senha criados no backend. Abra uma rota ativa atribuída ao motorista; para editar, a rota deve ser do dia corrente se o usuário for motorista.
+7. Ao iniciar o GPS, permita localização em primeiro plano e em segundo plano. O Android mantém uma notificação enquanto o serviço de localização está ativo.
 
-`GOOGLE_MAPS_ANDROID_API_KEY` pode ser omitida para gerar o projeto, mas o mapa do Android precisa de uma chave válida para carregar os tiles do Google Maps. Restrinja essa chave ao aplicativo e ao serviço de mapas no Google Cloud. O registro GPS em segundo plano exige um build nativo/de desenvolvimento e permissões de localização; Expo Go não executa essa tarefa.
+Outra opção é executar `npm run android` dentro de `mobile`; o Expo chama o build nativo e instala o app no dispositivo/emulador selecionado. O rastreamento em segundo plano exige o build nativo; não funciona no Expo Go.
 
-## Otimização e segurança da parada
+## Configuração e segurança
 
-Em `backend/src/config/routeLimits.js`, o limite compartilhado pelo serviço, otimizador e repositório é de 27 alunos por percurso; o mobile mostra a capacidade e bloqueia inclusões acima desse limite. A migração 004 protege também gravações diretas e concorrentes no PostgreSQL. A garagem/posição usada no recálculo e a escola são as pontas fixas. A primeira parada é a criança alcançável com a menor distância viária desde a van. A Matrix API recebe `approaches=curb` e é dividida em blocos que respeitam o limite de coordenadas do provedor. `routingService.js` também divide rotas longas em trechos de até 25 coordenadas, aplica a aproximação pela calçada em cada parada e junta a geometria e as métricas dos trechos.
+- `.env` e `mobile/.env` guardam configurações locais e não devem ser versionados. Os arquivos `.env.example` são modelos sem segredos reais.
+- O backend valida JWT, papel atual e vínculo do motorista com a rota. O segredo JWT é rejeitado se ausente ou menor que 32 bytes; senha é armazenada com scrypt.
+- O limitador de login mantém no máximo 5.000 faixas por processo e permite cinco erros a cada 15 minutos. Ele é local à instância: em produção com vários servidores, use um limitador/armazenamento compartilhado e HTTPS.
+- A API restringe o JSON a 1 MB, usa consultas SQL parametrizadas e não retorna mensagens internas de erro 5xx.
+- O cache de rota agora é separado por usuário e o cache antigo, sem identificação de dono, é descartado na primeira abertura após a atualização. O app desativa backup Android porque o SQLite contém dados pessoais; o arquivo SQLite não usa criptografia SQLCipher, portanto não considere um aparelho com root/desbloqueado como armazenamento seguro.
+- Nunca distribua chaves de desenvolvimento como credenciais de produção. Restrinja a chave do Google Maps ao app e mantenha o token Mapbox somente no servidor.
 
-O Mapbox Optimization v1 é consultado como referência somente em rotas com até 10 alunos, com `source=first`, `destination=last` e `approaches=curb`; uma falha nessa consulta opcional não impede a otimização baseada na matriz. Até 10 alunos, o otimizador usa busca exata na matriz. De 11 a 27, usa inserção de paradas e busca local, mantendo a primeira criança fixa e reduzindo a distância total até a escola; essa busca é heurística e não garante o ótimo global. Se a primeira parada mais próxima não permitir uma sequência viável, a otimização retorna erro em vez de substituí-la por outra criança. As estimativas dependem das rotas e distâncias retornadas pelo Mapbox, e a validação do lado da rua depende de coordenadas e do segmento orientado corretamente.
+## Verificação da auditoria
+
+Durante a revisão foram removidos o lockfile raiz sem manifesto, corrigido o retorno HTTP de JSON inválido/corpo grande, limitadas as entradas em memória do rate limiter, restringido o cache de rota por usuário, eliminados registros SQLite já confirmados e evitado usar uma posição GPS antiga como origem de recálculo. Eventos com horário mais de cinco minutos no futuro são recusados. O `.gitignore` cobre ambientes locais, dependências e builds nativos.
+
+A auditoria atual (`npm audit`) retorna zero vulnerabilidades no backend e no mobile. O mobile fixa `glob` e `minimatch` em versões corrigidas por overrides de npm, sem rebaixar o Expo SDK 57. Execute `npm audit` novamente antes de publicar.

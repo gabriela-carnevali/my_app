@@ -15,6 +15,7 @@ import {
   enfileirarEventoOffline,
   carregarRotaDoCache,
   salvarCacheDaRota,
+  removerRotaDoCache,
   pararRastreamentoDeLocalizacaoEmSegundoPlano,
   usarRastreamentoEmSegundoPlano,
 } from '../hooks/useBackgroundTracking.js';
@@ -69,6 +70,7 @@ export default function TelaDaRotaDoMotorista({
   const { cores, preferencias } = usarAparencia();
   const estilos = criarEstilos(cores);
   const tokenDeAcesso = tokenRecebido ?? sessao?.accessToken;
+  const idDoUsuario = sessao?.driver?.id;
   const [percurso, definirPercurso] = useState(percursoRecebido ?? null);
   const [carregandoPercurso, definirCarregamentoDoPercurso] = useState(Boolean(!percursoRecebido && idDaRota));
   const [erroDoPercurso, definirErroDoPercurso] = useState(null);
@@ -96,11 +98,11 @@ export default function TelaDaRotaDoMotorista({
       const percursoComId = { ...percursoRecebido, id: percursoRecebido.id ?? idDaRota };
       definirPercurso(percursoComId);
       definirParadas(percursoComId.stops ?? []);
-      salvarCacheDaRota(percursoComId).catch((erro) => {
+      salvarCacheDaRota(percursoComId, idDoUsuario).catch((erro) => {
         console.warn('Could not cache route locally:', erro?.message ?? erro);
       });
     }
-  }, [idDaRota, percursoRecebido]);
+  }, [idDaRota, idDoUsuario, percursoRecebido]);
 
   useEffect(() => {
     if (percursoRecebido || !idDaRota) {
@@ -114,7 +116,7 @@ export default function TelaDaRotaDoMotorista({
     const cabecalhos = tokenDeAcesso ? { Authorization: `Bearer ${tokenDeAcesso}` } : {};
     const carregarPercurso = async () => {
       try {
-        const percursoEmCache = await carregarRotaDoCache(idDaRota);
+        const percursoEmCache = await carregarRotaDoCache(idDaRota, idDoUsuario);
         if (requisicaoCancelada) return;
         if (percursoEmCache) {
           encontrouPercursoEmCache = true;
@@ -138,14 +140,29 @@ export default function TelaDaRotaDoMotorista({
         const resposta = await fetch(`${enderecoDaApi.replace(/\/+$/, '')}/api/routes/${encodeURIComponent(idDaRota)}`, { headers: cabecalhos });
         const dadosResposta = await resposta.json().catch(() => ({}));
         if (!resposta.ok) {
-          if (resposta.status === 401) await sairDaConta();
-          throw new Error(dadosResposta.message ?? `Não foi possível carregar a rota (HTTP ${resposta.status}).`);
+          const mensagemDeErro = dadosResposta.message ?? `Não foi possível carregar a rota (HTTP ${resposta.status}).`;
+          if (resposta.status === 401) {
+            await sairDaConta();
+            return;
+          }
+          if ([400, 403, 404].includes(resposta.status)) {
+            await removerRotaDoCache(idDaRota, idDoUsuario).catch((erro) => {
+              console.warn('Could not remove a route cache after an authorization failure:', erro?.message ?? erro);
+            });
+            if (!requisicaoCancelada) {
+              definirPercurso(null);
+              definirParadas([]);
+              definirErroDoPercurso(mensagemDeErro);
+            }
+            return;
+          }
+          throw new Error(mensagemDeErro);
         }
         const percursoCarregado = dadosResposta.route ?? dadosResposta;
         if (requisicaoCancelada) return;
         definirPercurso(percursoCarregado);
         definirParadas(percursoCarregado.stops ?? []);
-        salvarCacheDaRota(percursoCarregado).catch((erro) => {
+        salvarCacheDaRota(percursoCarregado, idDoUsuario).catch((erro) => {
           console.warn('Could not cache route locally:', erro?.message ?? erro);
         });
         aoCarregarRota?.(percursoCarregado);
@@ -157,7 +174,7 @@ export default function TelaDaRotaDoMotorista({
     };
     carregarPercurso();
     return () => { requisicaoCancelada = true; };
-  }, [enderecoDaApi, tokenDeAcesso, sairDaConta, aoCarregarRota, idDaRota, percursoRecebido]);
+  }, [enderecoDaApi, tokenDeAcesso, sairDaConta, aoCarregarRota, idDaRota, idDoUsuario, percursoRecebido]);
 
   const paradasOrdenadas = useMemo(
     () => [...paradas].sort((paradaEsquerda, paradaDireita) => (paradaEsquerda.order ?? paradaEsquerda.ordem_otimizada ?? 0) - (paradaDireita.order ?? paradaDireita.ordem_otimizada ?? 0)),
@@ -252,7 +269,7 @@ export default function TelaDaRotaDoMotorista({
           ? { ...paradaAtual, status: novoStatus, student: { ...alunoDaParada, status: novoStatus } }
           : paradaAtual;
       }));
-      const percursoEmCache = percurso ?? await carregarRotaDoCache(idDaRota);
+      const percursoEmCache = percurso ?? await carregarRotaDoCache(idDaRota, idDoUsuario);
       if (percursoEmCache) {
         const percursoAtualizado = {
           ...percursoEmCache,
@@ -264,7 +281,7 @@ export default function TelaDaRotaDoMotorista({
           }),
         };
         definirPercurso(percursoAtualizado);
-        await salvarCacheDaRota(percursoAtualizado);
+        await salvarCacheDaRota(percursoAtualizado, idDoUsuario);
       }
       try {
         await aoAtualizarStatusDoAluno?.(eventoDePresenca);
@@ -385,7 +402,7 @@ export default function TelaDaRotaDoMotorista({
           <Texto style={estilos.anchorName}>{primeiraParada ? (obterAlunoDaParada(primeiraParada).name ?? obterAlunoDaParada(primeiraParada).nome) : 'Sem alunos'}</Texto>
         </View>
         <View style={estilos.anchorCard}>
-          <Texto style={estilos.anchorLabel}>ÚLTIMA PARADA ANTES DA ESCOLA</Texto>
+          <Texto style={estilos.anchorLabel}>ÚLTIMA PARADA · MAIS PRÓXIMA DA ESCOLA</Texto>
           <Texto style={estilos.anchorName}>{ultimaParada ? (obterAlunoDaParada(ultimaParada).name ?? obterAlunoDaParada(ultimaParada).nome) : 'Destino: escola'}</Texto>
         </View>
       </View>
